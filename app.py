@@ -1,69 +1,146 @@
-import streamlit as st
+import sqlite3
+from datetime import datetime
+import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
+import streamlit as st
 
-st.set_page_config(page_title="Car Price Predictor", page_icon="🚗", layout="centered")
+# ==========================================
+# 1. DATABASE SETUP FUNCTIONS
+# ==========================================
 
-@st.cache_data
-def load_data():
-    data = pd.read_csv("CAR DETAILS FROM CAR DEKHO.csv")
-    data['brand'] = data['name'].apply(lambda x: str(x).split(' ')[0])
-    return data
 
-df = load_data()
+def init_db():
+  conn = sqlite3.connect("car_predictions.db")
+  cursor = conn.cursor()
+  # Table create karna agar pehle se nahi bani ho
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            car_name TEXT,
+            year INTEGER,
+            km_driven INTEGER,
+            fuel TEXT,
+            seller_type TEXT,
+            transmission TEXT,
+            owner TEXT,
+            predicted_price REAL
+        )
+    """)
+  conn.commit()
+  conn.close()
 
-@st.cache_resource
-def get_trained_model(data):
-    features = ['brand', 'year', 'km_driven', 'fuel', 'seller_type', 'transmission', 'owner']
-    X = data[features]
-    y = data['selling_price']
 
-    cat_cols = ['brand', 'fuel', 'seller_type', 'transmission', 'owner']
-    preprocessor = ColumnTransformer(
-        transformers=[('cat', OneHotEncoder(handle_unknown='ignore'), cat_cols)],
-        remainder='passthrough'
-    )
+def insert_prediction(
+    name, year, km, fuel, seller, trans, owner, predicted_price
+):
+  conn = sqlite3.connect("car_predictions.db")
+  cursor = conn.cursor()
+  current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    pipe = Pipeline(steps=[
-        ('preprocessor', preprocessor),
-        ('regressor', RandomForestRegressor(n_estimators=100, random_state=42))
-    ])
-    pipe.fit(X, y)
-    return pipe
+  cursor.execute(
+      """
+        INSERT INTO predictions (
+            timestamp, car_name, year, km_driven, fuel, 
+            seller_type, transmission, owner, predicted_price
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+      (
+          current_time,
+          name,
+          year,
+          km,
+          fuel,
+          seller,
+          trans,
+          owner,
+          predicted_price,
+      ),
+  )
 
-model = get_trained_model(df)
+  conn.commit()
+  conn.close()
 
-st.title("🚗 Car Price Prediction App")
-st.write("Enter car details below and click **Predict Price** to get the estimated market value of your car.")
 
-col1, col2 = st.columns(2)
+def get_all_predictions():
+  conn = sqlite3.connect("car_predictions.db")
+  # SQL query se DataFrame load karna
+  df = pd.read_sql_query(
+      "SELECT * FROM predictions ORDER BY id DESC", conn
+  )
+  conn.close()
+  return df
 
-with col1:
-    brand = st.selectbox("Brand", sorted(df['brand'].unique()))
-    fuel = st.selectbox("Fuel Type", df['fuel'].unique())
-    seller_type = st.selectbox("Seller Type", df['seller_type'].unique())
-    year = st.number_input("Manufacturing Year", min_value=int(df['year'].min()), max_value=int(df['year'].max()), value=2017, step=1)
 
-with col2:
-    transmission = st.selectbox("Transmission", df['transmission'].unique())
-    owner = st.selectbox("Owner Type", df['owner'].unique())
-    km_driven = st.number_input("Kilometers Driven (km)", min_value=500, max_value=800000, value=45000, step=1000)
+# Database initialize karein
+init_db()
 
-st.markdown("<br>", unsafe_allow_html=True)
+# ==========================================
+# 2. STREAMLIT APP UI & PREDICTION
+# ==========================================
 
-if st.button("🔮 Predict Car Price", use_container_width=True):
-    input_row = pd.DataFrame([{
-        'brand': brand,
-        'year': year,
-        'km_driven': km_driven,
-        'fuel': fuel,
-        'seller_type': seller_type,
-        'transmission': transmission,
-        'owner': owner
-    }])
-    pred = model.predict(input_row)[0]
-    st.success(f"### Estimated Selling Price: ₹ {int(pred):,}")
+st.title("🚗 Car Price Predictor")
+
+# Input Fields
+car_name = st.text_input("Car Model / Name", "Maruti Swift Dzire VDI")
+year = st.number_input(
+    "Manufacturing Year", min_value=1990, max_value=2026, value=2015
+)
+km_driven = st.number_input(
+    "Kilometers Driven", min_value=0, max_value=1000000, value=50000
+)
+fuel = st.selectbox("Fuel Type", ["Petrol", "Diesel", "CNG", "LPG", "Electric"])
+seller_type = st.selectbox(
+    "Seller Type", ["Individual", "Dealer", "Trustmark Dealer"]
+)
+transmission = st.selectbox("Transmission", ["Manual", "Automatic"])
+owner = st.selectbox(
+    "Owner Type",
+    [
+        "First Owner",
+        "Second Owner",
+        "Third Owner",
+        "Fourth & Above Owner",
+        "Test Drive Car",
+    ],
+)
+
+# Predict Button
+if st.button("Predict Price"):
+  # Yahan aapka model prediction logic aayega (example: model.predict(...))
+  # Example calculation:
+  predicted_price = round(float(np.random.uniform(200000, 800000)), 2)
+
+  st.success(f"Estimated Selling Price: ₹ {predicted_price:,.2f}")
+
+  # Database me save karna
+  insert_prediction(
+      name=car_name,
+      year=year,
+      km=km_driven,
+      fuel=fuel,
+      seller=seller_type,
+      trans=transmission,
+      owner=owner,
+      predicted_price=predicted_price,
+  )
+  st.info("Prediction data successfully database me save ho gaya hai!")
+
+# ==========================================
+# 3. DATABASE RECORDS DISPLAY KARNA
+# ==========================================
+
+st.markdown("---")
+st.subheader("📊 Saved Predictions History (SQLite Database)")
+
+# Refresh button database view ke liye
+if st.button("Refresh Database Data"):
+  st.rerun()
+
+history_df = get_all_predictions()
+
+if not history_df.empty:
+  st.dataframe(history_df, use_container_width=True)
+else:
+  st.write("Abhi tak koi prediction database me record nahi hui hai.")
+    
